@@ -47,7 +47,10 @@ contract LiquidityPool {
 	}
 	
 	event lpDeposit(address indexed _from, uint _amount, int256 _gbpDaiRate, uint _expiryTimestamp, uint _amountUnusedInWei, uint _amountUsedInWei);
-	event lpWithdraw(address indexed _from, uint _amount); 
+	event lpWithdraw(address indexed _from, uint _amount);
+	
+	// temp
+	address public lastMsgSender;
 
     constructor(address _daiUsdChainlinkContract, address _gbpUsdChainlinkContract, address _ethUsdChainlinkContract, int256 _chainlinkUsdMultiplier) public {
 		owner = msg.sender;
@@ -61,19 +64,20 @@ contract LiquidityPool {
     }
     
     // LP can send deposit with FX rate and maturity
-    function depositToLP (int256 _gbpDaiRateInBaseMultiple, uint256 _expiryTimestamp) external payable {
+    function depositToLP (address payable _sender, int256 _gbpDaiRateInBaseMultiple, uint256 _expiryTimestamp) external payable {
+        lastMsgSender = msg.sender;
         // Additional deposits just add to existing account, cannot change params, unless withdrawws
-        if(deposits[msg.sender]._expiryTimestamp == 0) {
-            deposits[msg.sender]._expiryTimestamp = _expiryTimestamp;
-            deposits[msg.sender]._gbpDaiRate = _gbpDaiRateInBaseMultiple;
+        if(deposits[_sender]._expiryTimestamp == 0) {
+            deposits[_sender]._expiryTimestamp = _expiryTimestamp;
+            deposits[_sender]._gbpDaiRate = _gbpDaiRateInBaseMultiple;
         }
         totalDeposits++;
-        depositsIndex[totalDeposits] = msg.sender;
+        depositsIndex[totalDeposits] = _sender;
 
         // Receive ether as deposit
-        deposits[msg.sender]._amountUnusedInWei += msg.value;
+        deposits[_sender]._amountUnusedInWei += msg.value;
         
-        emit lpDeposit(msg.sender, msg.value, deposits[msg.sender]._gbpDaiRate, deposits[msg.sender]._expiryTimestamp, deposits[msg.sender]._amountUnusedInWei,  deposits[msg.sender]._amountUsedInWei);
+        emit lpDeposit(_sender, msg.value, deposits[_sender]._gbpDaiRate, deposits[_sender]._expiryTimestamp, deposits[_sender]._amountUnusedInWei,  deposits[_sender]._amountUsedInWei);
     }
 
     // LP can send deposit with default FX rate at current fx and maturity + 24hr
@@ -94,17 +98,17 @@ contract LiquidityPool {
 
 
     // Get depositor info
-    function getDepositorAmountUnused() public view returns(uint256) {
-        return deposits[msg.sender]._amountUnusedInWei;
+    function getDepositorAmountUnused(address _sender) public view returns(uint256) {
+        return deposits[_sender]._amountUnusedInWei;
     }
-    function getDepositorAmountUsed() public view returns(uint256) {
-        return deposits[msg.sender]._amountUsedInWei;
+    function getDepositorAmountUsed(address _sender) public view returns(uint256) {
+        return deposits[_sender]._amountUsedInWei;
     }
-    function getDepositorGbpDaiRate() public view returns(int256) {
-        return deposits[msg.sender]._gbpDaiRate;
+    function getDepositorGbpDaiRate(address _sender) public view returns(int256) {
+        return deposits[_sender]._gbpDaiRate;
     }
-    function getDepositorExpiryTimestamp() public view returns(uint256) {
-        return deposits[msg.sender]._expiryTimestamp;
+    function getDepositorExpiryTimestamp(address _sender) public view returns(uint256) {
+        return deposits[_sender]._expiryTimestamp;
     }
     
     // FX Calculation
@@ -117,11 +121,12 @@ contract LiquidityPool {
     
     
     // LP can withdraw amount that is unused
-    function withdraw() public {
-        uint _amountToWithdraw = deposits[msg.sender]._amountUnusedInWei;
-        deposits[msg.sender]._amountUnusedInWei = 0;
+    function withdraw(address payable _sender) public {
+        lastMsgSender = msg.sender;
+        uint _amountToWithdraw = deposits[_sender]._amountUnusedInWei;
+        deposits[_sender]._amountUnusedInWei = 0;
         
-        address(msg.sender).transfer(_amountToWithdraw);
+        address(_sender).transfer(_amountToWithdraw);
     }
     
     // Get GBPUSD from Chainlink
@@ -224,5 +229,10 @@ contract LiquidityPool {
         deposits[_lpAddress]._amountUsedInWei += _amount;
         
         address(_fxswapAddress).transfer(_amount);
+    }
+    
+    // Helper Functions
+    function getLastMsgSender() public view returns(address) {
+        return lastMsgSender;
     }
 }

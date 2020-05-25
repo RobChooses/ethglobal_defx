@@ -115,7 +115,7 @@ contract FXSwapManager {
     struct S_Deposit {
         uint256 _amountUnusedInWei; // Initially 0
         uint256 _amountUsedInWei;
-        FXSwap[] _fxSwaps;
+        FXSwap _fxSwap;
     }
 
     // Map of deposits of hedge buyers
@@ -124,6 +124,10 @@ contract FXSwapManager {
 
     // Margin requirement in percent
     uint margin = 25;
+    
+    // Temp
+    bool public isSwapFound;
+    bool public breakpointSet;
 
     // LP
     LiquidityPool public lpInstance;
@@ -134,15 +138,15 @@ contract FXSwapManager {
     constructor(address _daiUsdChainlinkContract, address _gbpUsdChainlinkContract, address _ethUsdChainlinkContract, int256 _chainlinkUsdMultiplier) public {
         owner = msg.sender;
         chainlinkUsdMultiplier = _chainlinkUsdMultiplier;
+        
+        isSwapFound = false;
+        breakpointSet= false;
 
         lpInstance = new LiquidityPool(_daiUsdChainlinkContract, _gbpUsdChainlinkContract, _ethUsdChainlinkContract, _chainlinkUsdMultiplier);
     }
 
     // Hedge buyer deposits collateral amount needed to protect `daiAmount` for a certain gbp/dai rate and maturity timestamp
     function buyProtection (int256 _gbpDaiRate, uint256 _expiryTimestamp, uint256 _localAmount) external payable {
-
-        // Local amount in DAI
-        uint daiAmount = _localAmount * uint(lpInstance.calculateGbpDaiRate());
 
         // Local amount in Eth
         uint ethAmount = _localAmount * uint(lpInstance.calculateGbpEthRate());
@@ -156,6 +160,7 @@ contract FXSwapManager {
 
         // Match swap with LP
         (bool isFound, address payable addressOfLP) = lpInstance.getFirstAvailableLP (_gbpDaiRate, _expiryTimestamp, marginAmountInEth);
+        isSwapFound = isFound;
         if (isFound) {
             createSwap(this, addressOfLP, _gbpDaiRate, _expiryTimestamp, _localAmount, marginAmountInEth);
         }
@@ -179,9 +184,11 @@ contract FXSwapManager {
 
         // Move margin amounts from buyer and seller
         address(fxswap).transfer(_marginAmountInEth);
+        
+        breakpointSet = true;
         lpInstance.transferFromLpToSwap(_lpAddress, address(fxswap), _marginAmountInEth);
 
-        buyDeposits[msg.sender]._fxSwaps.push(fxswap);
+        buyDeposits[msg.sender]._fxSwap = fxswap;
 
     }
 
@@ -217,19 +224,37 @@ contract FXSwapManager {
     function getBuyerAmountUsed() public view returns(uint256) {
         return buyDeposits[msg.sender]._amountUsedInWei;
     }
-    function getBuyerNumberOfSwap() public view returns(uint) {
-        return buyDeposits[msg.sender]._fxSwaps.length;
-    }
     function getBuyerSwapBalance(uint _index) public view returns(uint) {
-        return buyDeposits[msg.sender]._fxSwaps[_index].getBalance();
+        return buyDeposits[msg.sender]._fxSwap.getBalance();
     }
 
     // LP can send deposit with FX rate and maturity
     function depositToLP (int256 _gbpDaiRateInBaseMultiple, uint256 _expiryTimestamp) external payable {
-        lpInstance.depositToLP(_gbpDaiRateInBaseMultiple, _expiryTimestamp);
+        lpInstance.depositToLP.value(msg.value)(msg.sender, _gbpDaiRateInBaseMultiple, _expiryTimestamp);
     }
 
-    function withdrawLp() public {
-        lpInstance.withdraw();
+    // Let LP withdraw
+    function withdrawLP(address payable _sender) public {
+        require(_sender == msg.sender, "Can only withdraw to sender address");
+        lpInstance.withdraw(_sender);
+    }
+    
+    // LP Functions
+    function getDepositorAmountUnused() public view returns(uint256) {
+        return lpInstance.getDepositorAmountUnused(msg.sender);
+    }
+    function getDepositorAmountUsed() public view returns(uint256) {
+        return lpInstance.getDepositorAmountUsed(msg.sender);
+    }
+    function getDepositorGbpDaiRate() public view returns(int256) {
+        return lpInstance.getDepositorGbpDaiRate(msg.sender);
+    }
+    function getDepositorExpiryTimestamp() public view returns(uint256) {
+        return lpInstance.getDepositorExpiryTimestamp(msg.sender);
+    }
+    
+    // Helper Functions
+    function getLastMsgSender() public view returns(address) {
+        return lpInstance.getLastMsgSender();
     }
 }
