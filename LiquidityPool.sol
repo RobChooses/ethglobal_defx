@@ -16,7 +16,7 @@ contract LiquidityPool {
     
     // Map of deposits of LPs 
     mapping(address => S_Deposit) private deposits;
-    mapping(uint => address) private depositsIndex;
+    mapping(uint => address payable) private depositsIndex;
     
     // Total number of depositors (unique address)
     uint public totalDeposits;
@@ -202,10 +202,10 @@ contract LiquidityPool {
     // Filtering functions
     
     // Get the first LP which has unused margin available to make swap matching requirement
-    function getFirstAvailableLP (int256 _gbpDaiRate, uint256 _expiryTimestamp, uint _marginNeeded) public view returns(bool, address) {
+    function getFirstAvailableLP (int256 _gbpDaiRate, uint256 _expiryTimestamp, uint _marginNeeded) public view returns(bool, address payable) {
         uint index = 1;
         bool isFound = false;
-        address addressOfDeposit;
+        address payable addressOfDeposit;
 
         while (index <= totalDeposits) {
             addressOfDeposit = depositsIndex[index];
@@ -225,6 +225,4 @@ contract LiquidityPool {
         
         address(_fxswapAddress).transfer(_amount);
     }
-    
 }
-
