@@ -26,11 +26,15 @@ contract FXSwap {
 
     bool public isSettled;
 
-    uint marginAmountInEth;
+    uint public marginAmountInEth;
 
     int256 public chainlinkUsdMultiplier;
 
     constructor(FXSwapManager _parentContract, address payable _lpAddress, address payable _buyerAddress, int256 _gbpDaiRate, uint _expiryTimestamp, uint256 _localAmount, uint256 _marginAmountInEth, int256 _chainlinkUsdMultiplier) public {
+        owner = msg.sender;
+        buyerAmountinWei = 0;
+        lpAmountinWei = 0;
+
         fxSwapManager = _parentContract;
         gbpDaiRate = _gbpDaiRate;
         expiryTimestamp = _expiryTimestamp;
@@ -42,6 +46,8 @@ contract FXSwap {
         isLpReady = false;
         isSettled = false;
         chainlinkUsdMultiplier = _chainlinkUsdMultiplier;
+
+        marginAmountInEth = _marginAmountInEth;
     }
 
     function () external payable {
@@ -49,28 +55,32 @@ contract FXSwap {
     }
 
     // Anyone can settle this
-    function settle() external payable {
-        require(block.timestamp > expiryTimestamp, "Contract cannot be settled before expiry");
+    function settle() external {
+        // require(block.timestamp > expiryTimestamp, "Contract cannot be settled before expiry");
         require(isSettled == false, "Contract already settled");
 
         // Calculate payment due from latest FX rate
         int rateDiff = calculateRateDiff();
 
-        int daiAmountDiff = (int(localAmount) * rateDiff) / chainlinkUsdMultiplier;
+        int daiAmountDiff = (int(localAmount) * rateDiff);
 
         // Payments are made in eth, so convert dai diff to usd to eth
-        int usdAmountDiff = (daiAmountDiff * fxSwapManager.getDaiUsdRate()) / chainlinkUsdMultiplier;
-        int ethAmountDiff = (usdAmountDiff * fxSwapManager.getEthUsdRate()) / chainlinkUsdMultiplier;
+        int usdAmountDiff = (daiAmountDiff * chainlinkUsdMultiplier) / fxSwapManager.getDaiUsdRate();
+        int ethAmountDiff = (usdAmountDiff * chainlinkUsdMultiplier) / fxSwapManager.getEthUsdRate();
 
 
         // Positive rateDiff means payment from LP to buyer
-        // Negative rateDiff means paymenr from buyer to LP
+        // Negative rateDiff means payment from buyer to LP
         uint tmpLpAmountinWei = uint(int(lpAmountinWei) + ethAmountDiff);
         uint tmpBuyerAmountinWei = uint(int(buyerAmountinWei) + ethAmountDiff);
 
         // Withdaw so set to zero
         lpAmountinWei = 0;
         buyerAmountinWei = 0;
+
+        // Update FXSwapManager balances
+
+        // Update LP
 
         address(lpAddress).transfer(tmpLpAmountinWei);
         address(buyerAddress).transfer(tmpBuyerAmountinWei);
@@ -88,11 +98,29 @@ contract FXSwap {
         return address(this).balance;
     }
 
+    function getMarginAmountInEth() external view returns(uint) {
+        return marginAmountInEth;
+    }
+
+    function getOwnerAddress() external view returns(address) {
+        return owner;
+    }
+
     function setBuyerAmountinWei(uint256 _amount) public onlyOwner {
         buyerAmountinWei = _amount;
     }
     function setLpAmountinWei(uint256 _amount) public onlyOwner {
         lpAmountinWei = _amount;
+    }
+
+    // TEMP function 
+    function tempReleaseBalance() public {
+        uint tmpLpAmountinWei = lpAmountinWei;
+        uint tmpBuyerAmountinWei = buyerAmountinWei;
+        lpAmountinWei = 0;
+        buyerAmountinWei = 0;
+        address(lpAddress).transfer(tmpLpAmountinWei);
+        address(buyerAddress).transfer(tmpBuyerAmountinWei);
     }
 }
 
@@ -124,7 +152,7 @@ contract FXSwapManager {
 
     // Margin requirement in percent
     uint margin = 25;
-    
+
     // Temp
     bool public isSwapFound;
     bool public breakpointSet;
@@ -138,7 +166,7 @@ contract FXSwapManager {
     constructor(address _daiUsdChainlinkContract, address _gbpUsdChainlinkContract, address _ethUsdChainlinkContract, int256 _chainlinkUsdMultiplier) public {
         owner = msg.sender;
         chainlinkUsdMultiplier = _chainlinkUsdMultiplier;
-        
+
         isSwapFound = false;
         breakpointSet= false;
 
@@ -153,7 +181,7 @@ contract FXSwapManager {
 
         // Margin is provided in eth!
         // Calculate margin or amount needed as collateral to protect local amount
-        uint marginAmountInEth = ethAmount * margin;
+        uint marginAmountInEth = ethAmount * uint(margin) * uint(chainlinkUsdMultiplier)/100 ;
 
         // Can only buy protection if buyer has deposited enough ethAmount
         require(buyDeposits[msg.sender]._amountUnusedInWei >= marginAmountInEth, "Not enough funds");
@@ -182,12 +210,15 @@ contract FXSwapManager {
 
         // TODO: Assert there is sufficient eth
 
-        // Move margin amounts from buyer and seller
+        // Move margin amounts from buyer to swap
+        //// lpInstance.depositToLP.value(msg.value)(msg.sender, _gbpDaiRateInBaseMultiple, _expiryTimestamp);
         address(fxswap).transfer(_marginAmountInEth);
-        
-        breakpointSet = true;
-        lpInstance.transferFromLpToSwap(_lpAddress, address(fxswap), _marginAmountInEth);
 
+        // Move margin amounts from seller to swap
+        lpInstance.transferFromLpToSwap(_lpAddress, address(fxswap), _marginAmountInEth);
+        breakpointSet = true;
+
+        // Set swap
         buyDeposits[msg.sender]._fxSwap = fxswap;
 
     }
@@ -196,6 +227,14 @@ contract FXSwapManager {
     function withdraw() public {
         uint _amountToWithdraw = buyDeposits[msg.sender]._amountUnusedInWei;
         buyDeposits[msg.sender]._amountUnusedInWei = 0;
+
+        address(msg.sender).transfer(_amountToWithdraw);
+    }
+
+    // TEMP function: Buyers can withdraw amount used
+    function withdrawUsed() public {
+        uint _amountToWithdraw = buyDeposits[msg.sender]._amountUsedInWei;
+        buyDeposits[msg.sender]._amountUsedInWei = 0;
 
         address(msg.sender).transfer(_amountToWithdraw);
     }
@@ -216,6 +255,10 @@ contract FXSwapManager {
     function getDaiUsdRate() public view returns(int256) {
         return lpInstance.getDaiUsdRate();
     }
+    // Get GBPUSD from Chainlink
+    function getGbpUsdRate() public view returns(int256) {
+        return lpInstance.getGbpUsdRate();
+    }
 
     // Get depositor info
     function getBuyerAmountUnused() public view returns(uint256) {
@@ -224,8 +267,21 @@ contract FXSwapManager {
     function getBuyerAmountUsed() public view returns(uint256) {
         return buyDeposits[msg.sender]._amountUsedInWei;
     }
-    function getBuyerSwapBalance(uint _index) public view returns(uint) {
+    function getBuyerSwapBalance() public view returns(uint) {
         return buyDeposits[msg.sender]._fxSwap.getBalance();
+    }
+
+    function getMarginAmountInEth() public view returns(uint) {
+        return buyDeposits[msg.sender]._fxSwap.getMarginAmountInEth();
+    }
+
+    function getOwnerAddress() public view returns(address) {
+        return buyDeposits[msg.sender]._fxSwap.getOwnerAddress();
+    }
+
+    // Buyer can settle the swap
+    function settleBuyerSwap() public {
+        buyDeposits[msg.sender]._fxSwap.settle();
     }
 
     // LP can send deposit with FX rate and maturity
@@ -238,7 +294,12 @@ contract FXSwapManager {
         require(_sender == msg.sender, "Can only withdraw to sender address");
         lpInstance.withdraw(_sender);
     }
-    
+
+    // Let LP settle
+    function settleLpSwap(uint _index) public {
+        address fxSwapContractAddresses = getFXSwapAddress(_index);
+    }
+
     // LP Functions
     function getDepositorAmountUnused() public view returns(uint256) {
         return lpInstance.getDepositorAmountUnused(msg.sender);
@@ -252,9 +313,19 @@ contract FXSwapManager {
     function getDepositorExpiryTimestamp() public view returns(uint256) {
         return lpInstance.getDepositorExpiryTimestamp(msg.sender);
     }
-    
+    function getNumberOfSwaps() public view returns(uint) {
+        return lpInstance.getNumberOfSwaps(msg.sender);
+    }
+    function getFXSwapAddress(uint _index) public view returns(address) {
+        return lpInstance.getFXSwapAddress(msg.sender, _index);
+    }
+
     // Helper Functions
     function getLastMsgSender() public view returns(address) {
         return lpInstance.getLastMsgSender();
+    }
+
+    function tempReleaseBalance() public {
+        buyDeposits[msg.sender]._fxSwap.tempReleaseBalance();
     }
 }

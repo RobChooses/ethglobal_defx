@@ -4,23 +4,30 @@ import "./ChainlinkRef.sol";
 
 // Contract for Liquidity Providers to deposit their Ethereum
 contract LiquidityPool {
-    
+
     address owner;
-    
+
     struct S_Deposit {
         uint256 _amountUnusedInWei; // Initially 0
         uint256 _amountUsedInWei;   // Initially 0
         int256 _gbpDaiRate;  // Rate that LP will accept at most * baseRateMultiple
         uint256 _expiryTimestamp; // Maturity of longest swap exposure
     }
-    
-    // Map of deposits of LPs 
+
+    struct S_LPSwaps {
+       address[] _fxSwapContractAddress;
+    }
+
+    // Map of deposits of LPs
     mapping(address => S_Deposit) private deposits;
     mapping(uint => address payable) private depositsIndex;
-    
+
+    // Map of swaps of LPs
+    mapping(address => S_LPSwaps) private lpSwaps;
+
     // Total number of depositors (unique address)
     uint public totalDeposits;
-    
+
     // Store latest Chainlink values and timestamp
     struct S_ChainlinkData {
         int256 _gbpUsdRate;
@@ -37,18 +44,18 @@ contract LiquidityPool {
     ChainlinkRef private daiUsdInstance;
     ChainlinkRef private ethUsdInstance;
     S_ChainlinkData public chainlinkData;
-    
+
     // All Chainlink USD reference data values are multipled by this
     int256 public chainlinkUsdMultiplier;
-    
+
     modifier onlyOwner {
 		require(msg.sender == owner, "Only the contract owner can call this function");
 		_;
 	}
-	
+
 	event lpDeposit(address indexed _from, uint _amount, int256 _gbpDaiRate, uint _expiryTimestamp, uint _amountUnusedInWei, uint _amountUsedInWei);
 	event lpWithdraw(address indexed _from, uint _amount);
-	
+
 	// temp
 	address public lastMsgSender;
 
@@ -56,13 +63,13 @@ contract LiquidityPool {
 		owner = msg.sender;
 	    totalDeposits = 0;
         chainlinkUsdMultiplier = _chainlinkUsdMultiplier;
-        
+
         // Set oracles
         daiUsdInstance = ChainlinkRef(_daiUsdChainlinkContract);
         gbpUsdInstance = ChainlinkRef(_gbpUsdChainlinkContract);
         ethUsdInstance = ChainlinkRef(_ethUsdChainlinkContract);
     }
-    
+
     // LP can send deposit with FX rate and maturity
     function depositToLP (address payable _sender, int256 _gbpDaiRateInBaseMultiple, uint256 _expiryTimestamp) external payable {
         lastMsgSender = msg.sender;
@@ -76,7 +83,7 @@ contract LiquidityPool {
 
         // Receive ether as deposit
         deposits[_sender]._amountUnusedInWei += msg.value;
-        
+
         emit lpDeposit(_sender, msg.value, deposits[_sender]._gbpDaiRate, deposits[_sender]._expiryTimestamp, deposits[_sender]._amountUnusedInWei,  deposits[_sender]._amountUsedInWei);
     }
 
@@ -91,7 +98,7 @@ contract LiquidityPool {
         
         // Receive ether as deposit
         deposits[msg.sender]._amountUnusedInWei += msg.value;
-        
+
         // Emit deposit event
         emit lpDeposit(msg.sender, msg.value, deposits[msg.sender]._gbpDaiRate, deposits[msg.sender]._expiryTimestamp, deposits[msg.sender]._amountUnusedInWei,  deposits[msg.sender]._amountUsedInWei);
     }
@@ -110,7 +117,7 @@ contract LiquidityPool {
     function getDepositorExpiryTimestamp(address _sender) public view returns(uint256) {
         return deposits[_sender]._expiryTimestamp;
     }
-    
+
     // FX Calculation
     function calculateGbpDaiRate() public view returns(int256) {
          return (getGbpUsdRate() * chainlinkUsdMultiplier) / getDaiUsdRate();
@@ -118,17 +125,17 @@ contract LiquidityPool {
     function calculateGbpEthRate() public view returns(int256) {
         return (getGbpUsdRate() * chainlinkUsdMultiplier) / getEthUsdRate();
     }
-    
-    
+
+
     // LP can withdraw amount that is unused
     function withdraw(address payable _sender) public {
         lastMsgSender = msg.sender;
         uint _amountToWithdraw = deposits[_sender]._amountUnusedInWei;
         deposits[_sender]._amountUnusedInWei = 0;
-        
+
         address(_sender).transfer(_amountToWithdraw);
     }
-    
+
     // Get GBPUSD from Chainlink
     function getGbpUsdRate() public view returns(int256) {
         return gbpUsdInstance.getLatestAnswer();
@@ -203,9 +210,9 @@ contract LiquidityPool {
     function setEthUsdRound() private onlyOwner {
         chainlinkData._ethUsdRound = getEthUsdRound();
     }
-    
+
     // Filtering functions
-    
+
     // Get the first LP which has unused margin available to make swap matching requirement
     function getFirstAvailableLP (int256 _gbpDaiRate, uint256 _expiryTimestamp, uint _marginNeeded) public view returns(bool, address payable) {
         uint index = 1;
@@ -219,18 +226,31 @@ contract LiquidityPool {
                 break;
             }
         }
-        
+
         return(isFound, addressOfDeposit);
     }
-    
+
     function transferFromLpToSwap(address _lpAddress, address payable _fxswapAddress, uint _amount) public onlyOwner {
         // Update amounts of lp
         deposits[_lpAddress]._amountUnusedInWei -= _amount;
         deposits[_lpAddress]._amountUsedInWei += _amount;
-        
+
+        // Adding swap to mapping
+        address[] storage fxSwapContractAddresses = lpSwaps[_lpAddress]._fxSwapContractAddress;
+        fxSwapContractAddresses.push(_fxswapAddress);
+        lpSwaps[_lpAddress]._fxSwapContractAddress = fxSwapContractAddresses;
+
         address(_fxswapAddress).transfer(_amount);
     }
-    
+
+    function getNumberOfSwaps(address _lpAddress) public view returns(uint) {
+        return lpSwaps[_lpAddress]._fxSwapContractAddress.length;
+    }
+
+    function getFXSwapAddress(address _lpAddress, uint _index) public view returns(address) {
+        return lpSwaps[_lpAddress]._fxSwapContractAddress[_index];
+    }
+
     // Helper Functions
     function getLastMsgSender() public view returns(address) {
         return lastMsgSender;
